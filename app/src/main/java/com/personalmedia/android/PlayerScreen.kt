@@ -2,19 +2,26 @@ package com.personalmedia.android
 
 import android.net.Uri
 import android.app.Activity
+import android.content.res.Configuration
 import android.view.WindowManager
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.media3.common.MediaItem
 import androidx.media3.common.C
 import androidx.media3.common.Player
@@ -30,6 +37,12 @@ private data class Media3TrackOption(
     val group: Tracks.Group, val index: Int, val language: String,
     val title: String, val selected: Boolean
 )
+
+private fun media3Time(milliseconds: Long): String {
+    val seconds = milliseconds.coerceAtLeast(0L) / 1000
+    return if (seconds >= 3600) "%d:%02d:%02d".format(seconds / 3600, (seconds / 60) % 60, seconds % 60)
+    else "%02d:%02d".format(seconds / 60, seconds % 60)
+}
 
 private fun media3Options(player: ExoPlayer, type: Int): List<Media3TrackOption> = buildList {
     player.currentTracks.groups.filter { it.type == type }.forEach { group ->
@@ -50,6 +63,9 @@ fun PlayerScreen(uri: String, subtitleTracks: List<StremioSubtitle> = emptyList(
     preferences: PlaybackPreferences = PlaybackPreferences(), mediaKey: String? = null,
     onProgress: (Long) -> Unit = {}, onClose: () -> Unit) {
     val context = LocalContext.current
+    val configuration = LocalConfiguration.current
+    val phoneUi = configuration.smallestScreenWidthDp < 600
+    val phoneLandscape = phoneUi && configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
     val activity = context as? Activity
     val memoryStore = remember(context) { MediaTrackMemoryStore(context.applicationContext) }
     var rememberedTracks by remember(mediaKey) { mutableStateOf(memoryStore.read(mediaKey)) }
@@ -76,8 +92,21 @@ fun PlayerScreen(uri: String, subtitleTracks: List<StremioSubtitle> = emptyList(
         }
     }
     var mediaPlaying by remember(player) { mutableStateOf(player.isPlaying) }
+    var phoneFullscreen by remember { mutableStateOf(false) }
+    var phoneControlsVisible by remember(uri) { mutableStateOf(true) }
+    var controlsActivity by remember(uri) { mutableIntStateOf(0) }
+    var phonePosition by remember(player) { mutableLongStateOf(initialMs) }
+    var phoneDuration by remember(player) { mutableLongStateOf(0L) }
+    var phoneSeek by remember(player) { mutableStateOf<Float?>(null) }
+    var speedMenuOpen by remember { mutableStateOf(false) }
+    var phoneVolume by remember(player) { mutableFloatStateOf(player.volume) }
     var audioMenuOpen by remember { mutableStateOf(false) }
     var subtitleMenuOpen by remember { mutableStateOf(false) }
+    fun togglePhonePlayback() {
+        if (player.playWhenReady) player.pause() else player.play()
+        phoneControlsVisible = true
+        controlsActivity++
+    }
     var tracksRevision by remember(player) { mutableIntStateOf(0) }
     var audioApplied by remember(player, mediaKey) { mutableStateOf(false) }
     var subtitleApplied by remember(player, mediaKey) { mutableStateOf(false) }
@@ -209,8 +238,24 @@ fun PlayerScreen(uri: String, subtitleTracks: List<StremioSubtitle> = emptyList(
     LaunchedEffect(player) {
         while (true) { delay(5000); onProgress(player.currentPosition.coerceAtLeast(0)) }
     }
-    BackHandler { onClose() }
-    Column(Modifier.fillMaxSize().background(Color.Black)) {
+    LaunchedEffect(player, phoneUi) {
+        if (phoneUi) while (true) {
+            phonePosition = player.currentPosition.coerceAtLeast(0L)
+            phoneDuration = player.duration.takeIf { it > 0 && it != C.TIME_UNSET } ?: 0L
+            delay(400)
+        }
+    }
+    LaunchedEffect(phoneLandscape, phoneFullscreen, phoneControlsVisible,
+        controlsActivity, mediaPlaying, audioMenuOpen, subtitleMenuOpen, speedMenuOpen) {
+        if (phoneLandscape && !phoneFullscreen && phoneControlsVisible && mediaPlaying &&
+            !audioMenuOpen && !subtitleMenuOpen && !speedMenuOpen) {
+            delay(5000)
+            phoneControlsVisible = false
+        }
+    }
+    // Reuse the same working Audio/CC track menus in portrait and landscape.
+    // Video taps control their VISIBILITY; only the explicit transport button pauses.
+    val headerControls: @Composable () -> Unit = {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             TextButton(onClick = onClose) { Text("← Back", color = Color.White) }
             Row {
@@ -277,6 +322,186 @@ fun PlayerScreen(uri: String, subtitleTracks: List<StremioSubtitle> = emptyList(
                 }
             }
         }
+    }
+    BackHandler { if (phoneUi && phoneFullscreen) phoneFullscreen = false else onClose() }
+    if (phoneLandscape && !phoneFullscreen) {
+        // Never put landscape transport buttons in a vertically scrolling Column.
+        // Render the video full-bleed, then overlay a compact seek/transport panel.
+        Box(Modifier.fillMaxSize().background(Color.Black)) {
+            AndroidView(factory = {
+                PlayerView(it).apply { this.player = player; useController = false }
+            }, modifier = Modifier.fillMaxSize())
+            Box(Modifier.matchParentSize().clickable(onClickLabel = "Show or hide player controls") {
+                phoneControlsVisible = !phoneControlsVisible
+                controlsActivity++
+                if (!phoneControlsVisible) {
+                    audioMenuOpen = false; subtitleMenuOpen = false; speedMenuOpen = false
+                }
+            })
+            if (phoneControlsVisible) {
+                Box(Modifier.align(Alignment.TopCenter).fillMaxWidth()
+                    .background(Color(0xC9081428)).padding(horizontal = 8.dp)) {
+                    headerControls()
+                }
+                Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                    .background(Color(0xD9091A34))
+                    .padding(horizontal = 12.dp, vertical = 3.dp),
+                    verticalArrangement = Arrangement.spacedBy(0.dp)) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(media3Time(phoneSeek?.toLong() ?: phonePosition),
+                            color = Color.White, fontSize = 11.sp)
+                        Slider(value = (phoneSeek ?: phonePosition.toFloat()).coerceIn(0f,
+                                phoneDuration.coerceAtLeast(1L).toFloat()),
+                            onValueChange = { phoneSeek = it },
+                            onValueChangeFinished = {
+                                phoneSeek?.let { player.seekTo(it.toLong()) }
+                                phoneSeek = null
+                            }, valueRange = 0f..phoneDuration.coerceAtLeast(1L).toFloat(),
+                            enabled = phoneDuration > 0 && player.isCurrentMediaItemSeekable,
+                            modifier = Modifier.weight(1f).height(34.dp).padding(horizontal = 8.dp))
+                        Text(media3Time(phoneDuration), color = Color.White, fontSize = 11.sp)
+                    }
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceEvenly) {
+                        TextButton(onClick = {
+                            player.seekTo((phonePosition - 10000L).coerceAtLeast(0L))
+                            controlsActivity++
+                        }, enabled = player.isCurrentMediaItemSeekable) {
+                            Text("↶ 10", color = Color.White, fontSize = 15.sp)
+                        }
+                        TextButton(onClick = ::togglePhonePlayback) {
+                            Text(if (mediaPlaying) "Ⅱ Pause" else "▶ Play",
+                                color = phoneBlue, fontSize = 18.sp)
+                        }
+                        TextButton(onClick = {
+                            player.seekTo((phonePosition + 10000L).coerceAtMost(phoneDuration))
+                            controlsActivity++
+                        }, enabled = player.isCurrentMediaItemSeekable && phoneDuration > 0L) {
+                            Text("10 ↷", color = Color.White, fontSize = 15.sp)
+                        }
+                        Box {
+                            TextButton(onClick = { speedMenuOpen = true }) {
+                                Text("Speed ▾", color = Color.White, fontSize = 12.sp)
+                            }
+                            DropdownMenu(expanded = speedMenuOpen,
+                                onDismissRequest = { speedMenuOpen = false }) {
+                                listOf(.75f, 1f, 1.25f, 1.5f, 2f).forEach { speed ->
+                                    DropdownMenuItem(text = { Text("${speed}×") }, onClick = {
+                                        player.setPlaybackSpeed(speed)
+                                        speedMenuOpen = false
+                                        controlsActivity++
+                                    })
+                                }
+                            }
+                        }
+                    }
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("♪", color = Color.White, fontSize = 17.sp)
+                        Slider(value = phoneVolume,
+                            onValueChange = { phoneVolume = it; player.volume = it },
+                            valueRange = 0f..1f,
+                            modifier = Modifier.weight(1f).height(34.dp)
+                                .padding(start = 8.dp))
+                    }
+                }
+            }
+        }
+    } else {
+    Column(Modifier.fillMaxSize()
+        .background(if (phoneUi) Brush.verticalGradient(listOf(Color(0xFF101D34), phoneNavy))
+            else Brush.verticalGradient(listOf(Color.Black, Color.Black)))) {
+        if (!phoneFullscreen) headerControls()
+        if (phoneUi && !phoneFullscreen) {
+            Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).background(Color.Black)) {
+                AndroidView(factory = {
+                    PlayerView(it).apply { this.player = player; useController = false }
+                }, modifier = Modifier.fillMaxSize())
+                Box(Modifier.matchParentSize().clickable(onClickLabel = "Show or hide player controls") {
+                    phoneControlsVisible = !phoneControlsVisible
+                    controlsActivity++
+                    if (!phoneControlsVisible) {
+                        audioMenuOpen = false; subtitleMenuOpen = false; speedMenuOpen = false
+                    }
+                })
+                if (phoneControlsVisible) Box(Modifier.align(Alignment.Center)
+                    .background(Color(0xBD0B203B), CircleShape),
+                    contentAlignment = Alignment.Center) {
+                    TextButton(onClick = ::togglePhonePlayback) {
+                        Text(if (mediaPlaying) "Ⅱ" else "▶", color = Color.White,
+                            fontSize = 30.sp)
+                    }
+                }
+                if (phoneControlsVisible) TextButton(onClick = { phoneFullscreen = true },
+                    modifier = Modifier.align(Alignment.BottomEnd)) {
+                    Text("⛶ Fullscreen", color = Color.White, fontSize = 12.sp)
+                }
+            }
+            if (phoneControlsVisible) Column(Modifier.fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(13.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(media3Time((phoneSeek?.toLong() ?: phonePosition)), color = Color.White,
+                        fontSize = 12.sp)
+                    Slider(value = (phoneSeek ?: phonePosition.toFloat()).coerceIn(0f,
+                            phoneDuration.coerceAtLeast(1).toFloat()),
+                        onValueChange = { phoneSeek = it },
+                        onValueChangeFinished = {
+                            phoneSeek?.let { player.seekTo(it.toLong()) }
+                            phoneSeek = null
+                        }, valueRange = 0f..phoneDuration.coerceAtLeast(1L).toFloat(),
+                        enabled = phoneDuration > 0 && player.isCurrentMediaItemSeekable,
+                        modifier = Modifier.weight(1f).padding(horizontal = 10.dp))
+                    Text(media3Time(phoneDuration), color = Color.White, fontSize = 12.sp)
+                }
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceEvenly) {
+                    TextButton(onClick = { player.seekTo((phonePosition - 10000L).coerceAtLeast(0L)) },
+                        enabled = player.isCurrentMediaItemSeekable) {
+                        Text("↶ 10", color = if (player.isCurrentMediaItemSeekable) Color.White else Color.Gray)
+                    }
+                    TextButton(onClick = ::togglePhonePlayback) {
+                        Text(if (mediaPlaying) "Ⅱ" else "▶", fontSize = 30.sp,
+                            color = phoneBlue,
+                            modifier = Modifier.background(Color(0xFF162C4B),
+                                androidx.compose.foundation.shape.RoundedCornerShape(42.dp))
+                                .padding(horizontal = 18.dp, vertical = 5.dp))
+                    }
+                    TextButton(onClick = { player.seekTo((phonePosition + 10000L)
+                            .coerceAtMost(phoneDuration)) },
+                        enabled = player.isCurrentMediaItemSeekable && phoneDuration > 0L) {
+                        Text("10 ↷", color = if (phoneDuration > 0L) Color.White else Color.Gray)
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("♪", color = Color.White, fontSize = 24.sp)
+                    Slider(value = phoneVolume, onValueChange = { phoneVolume = it; player.volume = it },
+                        valueRange = 0f..1f, modifier = Modifier.weight(1f).padding(start = 10.dp))
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                    Box(Modifier.weight(1f)) {
+                        TextButton(onClick = { audioMenuOpen = true; subtitleMenuOpen = false },
+                            modifier = Modifier.fillMaxWidth()) { Text("Audio ▾", color = Color.White) }
+                    }
+                    Box(Modifier.weight(1f)) {
+                        TextButton(onClick = { subtitleMenuOpen = true; audioMenuOpen = false },
+                            modifier = Modifier.fillMaxWidth()) { Text("Subtitles ▾", color = Color.White) }
+                    }
+                    Box(Modifier.weight(1f)) {
+                        TextButton(onClick = { speedMenuOpen = true }, modifier = Modifier.fillMaxWidth()) {
+                            Text("Speed ▾", color = Color.White)
+                        }
+                        DropdownMenu(expanded = speedMenuOpen, onDismissRequest = { speedMenuOpen = false }) {
+                            listOf(.75f, 1f, 1.25f, 1.5f, 2f).forEach { speed ->
+                                DropdownMenuItem(text = { Text("${speed}×") }, onClick = {
+                                    player.setPlaybackSpeed(speed)
+                                    speedMenuOpen = false
+                                })
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
         AndroidView(factory = {
             PlayerView(it).apply {
                 this.player = player
@@ -285,5 +510,7 @@ fun PlayerScreen(uri: String, subtitleTracks: List<StremioSubtitle> = emptyList(
                     ViewGroup.LayoutParams.MATCH_PARENT)
             }
         }, modifier = Modifier.fillMaxWidth().weight(1f))
+        }
+    }
     }
 }

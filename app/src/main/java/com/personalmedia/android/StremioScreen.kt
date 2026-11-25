@@ -10,6 +10,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -18,8 +20,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -149,10 +153,11 @@ private fun StContinueCard(entry: StremioWatchEntry, open: () -> Unit) {
 @Composable
 private fun StBrowsePoster(item: StremioMeta, modifier: Modifier = Modifier,
     open: (StremioMeta) -> Unit) {
+    val phoneUi = LocalConfiguration.current.smallestScreenWidthDp < 600
     Column(modifier.clip(RoundedCornerShape(12.dp))
         .background(Color(0xFF111E30)).border(1.dp, Color(0xFF283C59), RoundedCornerShape(12.dp))
         .clickable { open(item) }) {
-        Box(Modifier.fillMaxWidth().height(190.dp)) {
+        Box(Modifier.fillMaxWidth().height(if (phoneUi) 221.dp else 190.dp)) {
             StBackground(item.poster.ifBlank { item.background }, Modifier.fillMaxSize(), Color(0x4807101D))
             if (item.poster.isBlank() && item.background.isBlank())
                 Text("Artwork unavailable", color = stMuted, fontSize = 11.sp,
@@ -229,9 +234,12 @@ fun StremioScreen(client: StremioClient, revision: Int, onRevision: () -> Unit,
     onTorrentPlay: (String, List<StremioSubtitle>, StremioMeta, String) -> Unit,
     onDirectPlay: (StremioSource, StremioMeta, String) -> Unit,
     preferredQuality: String = "auto",
+    startOnDiscover: Boolean = false,
+    discoverSignal: Int = 0,
     onWatch: (StremioMeta, String) -> Unit = { _, _ -> }) {
     val scope = rememberCoroutineScope()
     val appContext = LocalContext.current.applicationContext
+    val phoneUi = LocalConfiguration.current.smallestScreenWidthDp < 600
     val cachePath = appContext.cacheDir.absolutePath
     val watchStore = remember(client.email) { StremioWatchStore(appContext, client.email) }
     val watchedStore = remember(client.email) { StremioWatchedStore(appContext, client.email) }
@@ -248,11 +256,14 @@ fun StremioScreen(client: StremioClient, revision: Int, onRevision: () -> Unit,
     var password by remember { mutableStateOf("") }
     var authKey by remember { mutableStateOf("") }
     var search by remember { mutableStateOf("") }
-    var section by remember { mutableStateOf("Home") }
-    val sectionHistory = remember { PersonalMediaNavHistory("Home") }
+    var section by remember { mutableStateOf(if (startOnDiscover) "Discover" else "Home") }
+    val sectionHistory = remember { PersonalMediaNavHistory(if (startOnDiscover) "Discover" else "Home") }
     fun navigateSection(destination: String) {
         sectionHistory.visit(section, destination)
         section = destination
+    }
+    LaunchedEffect(discoverSignal) {
+        if (phoneUi && discoverSignal > 0 && section != "Discover") navigateSection("Discover")
     }
     var searchResults by remember { mutableStateOf(emptyList<StremioMeta>()) }
     var browseResults by remember { mutableStateOf(emptyList<StremioMeta>()) }
@@ -274,7 +285,7 @@ fun StremioScreen(client: StremioClient, revision: Int, onRevision: () -> Unit,
     }
     var selectedVideo by remember { mutableStateOf("") }
     var selectedCat by remember { mutableStateOf<StremioCatalog?>(null) }
-    var category by remember { mutableStateOf("movie") }
+    var category by remember { mutableStateOf(if (startOnDiscover) "all" else "movie") }
     var season by remember { mutableIntStateOf(1) }
     var episodeLimit by remember { mutableIntStateOf(32) }
     var genre by remember { mutableStateOf("") }
@@ -758,8 +769,11 @@ fun StremioScreen(client: StremioClient, revision: Int, onRevision: () -> Unit,
     LaunchedEffect(client.email, revision, section, category, selectedCat, genre) {
         if (!client.loggedIn || section != "Discover") return@LaunchedEffect
         val owner = client.email
-        val chosen = selectedCat?.takeIf { it.type == category }
+        val chosen = selectedCat?.takeIf { category == "all" || it.type == category }
         val plans = if (chosen != null) listOf(chosen)
+            else if (category == "all")
+                StremioBrowsePolicy.featuredCatalogs(client.catalogs, "movie", 4) +
+                    StremioBrowsePolicy.featuredCatalogs(client.catalogs, "series", 4)
             else StremioBrowsePolicy.featuredCatalogs(client.catalogs, category, 4)
         val selectedGenre = if (chosen == null) "" else genre
         val chunks = mutableMapOf<String, List<StremioMeta>>()
@@ -796,16 +810,21 @@ fun StremioScreen(client: StremioClient, revision: Int, onRevision: () -> Unit,
             }
         }
     }
-    Column(Modifier.fillMaxSize().background(pmBg).verticalScroll(rememberScrollState())
-        .padding(horizontal = 24.dp, vertical = 18.dp), verticalArrangement = Arrangement.spacedBy(15.dp)) {
+    Column(Modifier.fillMaxSize().background(if (phoneUi) phoneNavy else pmBg)
+        .verticalScroll(rememberScrollState())
+        .padding(horizontal = if (phoneUi) 17.dp else 24.dp,
+            vertical = if (phoneUi) 14.dp else 18.dp),
+        verticalArrangement = Arrangement.spacedBy(15.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("PERSONALMEDIA  /  STREMIO", color = stBlue, fontSize = 10.sp, fontWeight = FontWeight.Bold,
                     letterSpacing = 1.2.sp)
                 Spacer(Modifier.height(4.dp))
-                Text("Your cinema", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 29.sp)
+                Text(if (phoneUi && section == "Discover") "Discover" else "Your cinema",
+                    fontWeight = FontWeight.Bold, color = Color.White, fontSize = 29.sp)
             }
-            if (client.loggedIn) Text("Your add-ons · Native playback", fontSize = 11.sp, color = Color(0xFFA6C7EE))
+            if (client.loggedIn && !phoneUi) Text("Your add-ons · Native playback",
+                fontSize = 11.sp, color = Color(0xFFA6C7EE))
         }
         if (!client.loggedIn) {
             Column(Modifier.fillMaxWidth().background(stPanel, RoundedCornerShape(16.dp)).padding(22.dp),
@@ -839,13 +858,15 @@ fun StremioScreen(client: StremioClient, revision: Int, onRevision: () -> Unit,
                     color = stMuted, fontSize = 11.sp)
             }
         } else {
-            Row(Modifier.fillMaxWidth().background(stPanel, RoundedCornerShape(11.dp)).padding(12.dp),
+            Row(Modifier.fillMaxWidth().background(stPanel, RoundedCornerShape(11.dp))
+                .padding(if (phoneUi) 8.dp else 12.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
                 Text("STREMIO", color = Color(0xFF67AEFF), fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 Text("● Connected", color = Color(0xFF85E4BB), fontSize = 11.sp)
-                Text(client.email, color = stMuted, fontSize = 12.sp, maxLines = 1, modifier = Modifier.weight(1f))
-                Text("${client.addonInfo.size} add-ons",
-                    color = stMuted, fontSize = 11.sp)
+                if (!phoneUi) Text(client.email, color = stMuted, fontSize = 12.sp,
+                    maxLines = 1, modifier = Modifier.weight(1f))
+                else Spacer(Modifier.weight(1f))
+                Text("${client.addonInfo.size} add-ons", color = stMuted, fontSize = 11.sp)
                 StAction("↻ Refresh", enabled = !busy) { task { refreshConnectedAddons() } }
             }
             LazyRow(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
@@ -1140,16 +1161,51 @@ fun StremioScreen(client: StremioClient, revision: Int, onRevision: () -> Unit,
                     }
                 }
                 "Discover" -> {
-                    Text("Discover movies and series", color = Color.White, fontSize = 23.sp, fontWeight = FontWeight.Bold)
+                    if (phoneUi) {
+                        OutlinedTextField(search, { search = it },
+                            placeholder = { Text("Search movies and series") },
+                            leadingIcon = { Text("⌕", color = stBlue, fontSize = 24.sp) },
+                            trailingIcon = {
+                                Text("Go", color = stBlue, modifier = Modifier.clickable {
+                                    if (search.trim().length >= 2) {
+                                        val requested = search.trim()
+                                        navigateSection("Search")
+                                        task {
+                                            val result = client.search(requested)
+                                            if (search.trim() == requested && section == "Search") {
+                                                searchResults = StremioBrowsePolicy.uniqueTitles(result)
+                                                searchExecuted = true
+                                            }
+                                        }
+                                    } else navigateSection("Search")
+                                })
+                            },
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                            keyboardActions = KeyboardActions(onSearch = {
+                                val requested = search.trim()
+                                navigateSection("Search")
+                                if (requested.length >= 2) task {
+                                    val result = client.search(requested)
+                                    if (search.trim() == requested && section == "Search") {
+                                        searchResults = StremioBrowsePolicy.uniqueTitles(result)
+                                        searchExecuted = true
+                                    }
+                                }
+                            }),
+                            singleLine = true, modifier = Modifier.fillMaxWidth())
+                        Text("Stremio catalogs", color = stMuted, fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold)
+                    } else Text("Discover movies and series", color = Color.White,
+                        fontSize = 23.sp, fontWeight = FontWeight.Bold)
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                        items(listOf("movie", "series")) { type ->
-                            PmPill(if (type == "movie") "Movies" else "Series", category == type) {
+                        items(if (phoneUi) listOf("all", "movie", "series") else listOf("movie", "series")) { type ->
+                            PmPill(when (type) { "all" -> "All"; "movie" -> "Movies"; else -> "Series" }, category == type) {
                                 category = type; selectedCat = null; browseResults = emptyList()
                                 genre = ""; page = 0
                             }
                         }
                     }
-                    val cats = client.catalogs.filter { it.type == category }
+                    val cats = client.catalogs.filter { category == "all" || it.type == category }
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         item {
                             PmPill("All catalogues", selectedCat == null) {
@@ -1162,7 +1218,7 @@ fun StremioScreen(client: StremioClient, revision: Int, onRevision: () -> Unit,
                             }
                         }
                     }
-                    selectedCat?.takeIf { it.type == category }?.let { cat ->
+                    selectedCat?.takeIf { category == "all" || it.type == category }?.let { cat ->
                         if (cat.genres.isNotEmpty()) LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                             items(listOf("All") + cat.genres) { g ->
                                 PmPill(g, (if (genre.isEmpty()) "All" else genre) == g) {
@@ -1179,7 +1235,7 @@ fun StremioScreen(client: StremioClient, revision: Int, onRevision: () -> Unit,
                         Text("${browseResults.size} titles · refreshes in background", color = stMuted, fontSize = 12.sp)
                         StBrowseGrid(browseResults, ::openItem)
                     }
-                    selectedCat?.takeIf { it.type == category }?.let { cat ->
+                    selectedCat?.takeIf { category == "all" || it.type == category }?.let { cat ->
                         if (cat.paginated) StAction("Load more", enabled = !busy) {
                             task {
                                 val nextPage = page + 1

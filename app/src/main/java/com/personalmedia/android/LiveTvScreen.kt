@@ -24,6 +24,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.Modifier
@@ -389,6 +390,7 @@ private fun T405SkyGuide(channels: List<JSONObject>, selected: String,
 @Composable
 fun LiveTvScreen(onPlay: (String) -> Unit, onFullscreenChanged: (Boolean) -> Unit = {}) {
     val context = LocalContext.current
+    val phoneUi = LocalConfiguration.current.smallestScreenWidthDp < 600
     // Live T405 uses the native Siano C++ TS endpoint with libmpv, matching the
     // working native receiver/player split. Media3 is a clearly labelled fallback
     // only for Android ABIs where an operational libmpv.so is not bundled.
@@ -644,40 +646,52 @@ fun LiveTvScreen(onPlay: (String) -> Unit, onFullscreenChanged: (Boolean) -> Uni
         if (rootPixelPosition != next) rootPixelPosition = next
     }) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())
-        .padding(start = 22.dp, end = 22.dp, top = 18.dp, bottom = 26.dp),
+        .padding(start = if (phoneUi) 14.dp else 22.dp, end = if (phoneUi) 14.dp else 22.dp,
+            top = if (phoneUi) 12.dp else 18.dp, bottom = 26.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically) {
-            Column {
+        val receiving = status.optLong("lastTsAgeMs", -1L) in 0L..4000L
+        val connectionCaption = when {
+            streamUrl.isNotBlank() && receiving -> "● Live transport · ${if (useMpv) "MPV" else "Media3"}"
+            receiving -> "● Freeview transport receiving"
+            status.optBoolean("deviceReplied") -> "● Tuner replied"
+            status.optBoolean("connected") -> "● Socket ready · no control reply"
+            else -> "○ Tuner disconnected"
+        }
+        val connectionTint = if (receiving || status.optBoolean("deviceReplied")) tvGreen else tvMuted
+        if (phoneUi) {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("LIVE TV  /  AUGUST T405", color = tvBlue, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 Text("Freeview", color = tvText, fontSize = 25.sp, fontWeight = FontWeight.Bold)
+                Text(connectionCaption, color = connectionTint, fontSize = 12.sp, maxLines = 2)
             }
-            val receiving = status.optLong("lastTsAgeMs", -1L) in 0L..4000L
-            Text(when {
-                streamUrl.isNotBlank() && receiving -> "● Live transport · ${if (useMpv) "MPV" else "Media3"}"
-                receiving -> "● Freeview transport receiving"
-                status.optBoolean("deviceReplied") -> "● Tuner replied"
-                status.optBoolean("connected") -> "● Socket ready · no control reply"
-                else -> "○ Tuner disconnected"
-            }, color = if (receiving || status.optBoolean("deviceReplied")) tvGreen else tvMuted,
-                fontSize = 12.sp, maxLines = 2)
+        } else {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically) {
+                Column {
+                    Text("LIVE TV  /  AUGUST T405", color = tvBlue, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text("Freeview", color = tvText, fontSize = 25.sp, fontWeight = FontWeight.Bold)
+                }
+                Text(connectionCaption, color = connectionTint, fontSize = 12.sp, maxLines = 2)
+            }
         }
         BoxWithConstraints(Modifier.fillMaxWidth()) {
             val wide = maxWidth >= 1000.dp
             @Composable fun playerPane(modifier: Modifier) {
                 Column(modifier.clip(RoundedCornerShape(20.dp))
                     .border(1.dp, Color(0xFF253344), RoundedCornerShape(20.dp)).background(tvPanel)) {
-                    Row(Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 20.dp),
+                    Row(Modifier.fillMaxWidth().height(if (phoneUi) 52.dp else 64.dp)
+                        .padding(horizontal = if (phoneUi) 12.dp else 20.dp),
                         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
                         Text(selected?.optString("number")?.takeIf { it != "0" }.orEmpty().ifEmpty { "TV" },
                             color = tvBlue, fontSize = 22.sp, fontWeight = FontWeight.Bold)
                         Text(selected?.optString("name")?.ifEmpty { "Live television" } ?: "Live television",
-                            color = tvText, fontSize = 19.sp, fontWeight = FontWeight.Bold,
+                            color = tvText, fontSize = if (phoneUi) 15.sp else 19.sp, fontWeight = FontWeight.Bold,
                             maxLines = 1, modifier = Modifier.weight(1f))
                         if (streamUrl.isNotEmpty()) Text("● LIVE", color = tvBlue, fontSize = 11.sp)
-                        TvChip("● Freeview", status.optBoolean("deviceReplied"))
+                        if (!phoneUi) TvChip("● Freeview", status.optBoolean("deviceReplied"))
                     }
-                    Box(Modifier.fillMaxWidth().height(if (wide) 376.dp else 320.dp)
+                    Box(Modifier.fillMaxWidth().then(if (phoneUi) Modifier.aspectRatio(16f / 9f)
+                            else Modifier.height(if (wide) 376.dp else 320.dp))
                         .background(Color.Black).onGloballyPositioned { coordinates ->
                             val p = coordinates.positionInRoot()
                             val nextPosition = IntOffset(p.x.toInt(), p.y.toInt())
@@ -687,15 +701,17 @@ fun LiveTvScreen(onPlay: (String) -> Unit, onFullscreenChanged: (Boolean) -> Uni
                         // The one actual SurfaceView is a stable sibling of the scrolling content.
                         // Fullscreen resizes it instead of destroying/recreating the MPV session.
                         if (streamUrl.isEmpty()) {
-                            Column(Modifier.align(Alignment.Center).fillMaxWidth(.80f)
-                                .background(Color(0xDC0C1725), RoundedCornerShape(18.dp)).padding(20.dp),
+                            Column(Modifier.align(Alignment.Center).fillMaxWidth(if (phoneUi) .94f else .80f)
+                                .background(Color(0xDC0C1725), RoundedCornerShape(18.dp))
+                                .padding(if (phoneUi) 10.dp else 20.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                verticalArrangement = Arrangement.spacedBy(if (phoneUi) 5.dp else 10.dp)) {
                                 Text(if (pendingKey.isNotEmpty()) "Tuning broadcast channel…" else "LIVE TV",
-                                    color = tvText, fontSize = 23.sp, fontWeight = FontWeight.Bold)
+                                    color = tvText, fontSize = if (phoneUi) 18.sp else 23.sp, fontWeight = FontWeight.Bold)
                                 Text(if (pendingKey.isNotEmpty()) tuningStage(status, selected) else
                                     "Choose a saved channel in the Sky guide below to watch live Freeview television",
-                                    color = Color(0xFFB5C7E0), fontSize = 13.sp, lineHeight = 17.sp)
+                                    color = Color(0xFFB5C7E0), fontSize = if (phoneUi) 11.sp else 13.sp,
+                                    lineHeight = if (phoneUi) 14.sp else 17.sp)
                                 if (!status.optBoolean("connected")) TvButton("Connect August T405") {
                                     val cp = control.toIntOrNull() ?: 5002; val rp = receive.toIntOrNull() ?: 5001
                                     message = T405SessionController.connect(context, host, cp, rp)
@@ -703,9 +719,10 @@ fun LiveTvScreen(onPlay: (String) -> Unit, onFullscreenChanged: (Boolean) -> Uni
                             }
                         }
                     }
-                    Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 13.dp),
+                    Row(Modifier.fillMaxWidth().then(if (phoneUi) Modifier.horizontalScroll(rememberScrollState()) else Modifier)
+                        .padding(horizontal = if (phoneUi) 10.dp else 18.dp, vertical = 13.dp),
                         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                        Column(Modifier.weight(1f)) {
+                        Column(if (phoneUi) Modifier.width(140.dp) else Modifier.weight(1f)) {
                             Text(if (streamUrl.isNotEmpty()) (if (isPlaying) "ON AIR · ${if (useMpv) "MPV" else "MEDIA3 FALLBACK"}" else "ON AIR · PAUSED")
                                 else if (pendingKey.isNotEmpty()) "TUNING" else "READY WHEN YOU ARE",
                                 color = if (streamUrl.isNotEmpty()) tvBlue else tvMuted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
@@ -737,11 +754,13 @@ fun LiveTvScreen(onPlay: (String) -> Unit, onFullscreenChanged: (Boolean) -> Uni
                                 "${subtitleOptions.size} broadcast subtitle track(s)", color = tvMuted, fontSize = 10.sp)
                         }
                     }
-                    Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp),
+                    Row(Modifier.fillMaxWidth().then(if (phoneUi) Modifier.horizontalScroll(rememberScrollState()) else Modifier)
+                        .padding(horizontal = if (phoneUi) 10.dp else 18.dp, vertical = 14.dp),
                         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text(clock, color = tvText, fontSize = 12.sp)
                         Text("Now  ${now.ifEmpty { "—" }}   |   Next  ${next.ifEmpty { "—" }}", fontSize = 11.sp,
-                            color = tvMuted, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            color = tvMuted, modifier = if (phoneUi) Modifier.width(180.dp) else Modifier.weight(1f),
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Column {
                             Text("Signal", color = tvMuted, fontSize = 10.sp)
                             Text(if (!status.optBoolean("signalKnown")) "Not reported" else if (status.optBoolean("signalLocked"))

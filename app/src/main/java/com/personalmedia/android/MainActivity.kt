@@ -23,7 +23,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -116,6 +118,10 @@ private fun PersonalMediaApp(chooseFiles: (String?, (List<Uri>) -> Unit) -> Unit
     loadBackup: ((Uri) -> Unit) -> Unit,
     saveDiagnostics: ((Uri) -> Unit) -> Unit) {
     val context = LocalContext.current
+    // Smallest width remains stable across portrait/landscape rotations.
+    // Foldables and tablets at 600dp+ retain the original large-screen shell.
+    val phoneUi = LocalConfiguration.current.smallestScreenWidthDp < 600
+    var discoverTapSignal by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
     // Keep the interface locale separate from media track and artwork metadata preferences.
     val uiLanguageStore = remember { PmUiLanguageStore(context.applicationContext) }
@@ -528,9 +534,12 @@ private fun PersonalMediaApp(chooseFiles: (String?, (List<Uri>) -> Unit) -> Unit
                 AsyncImage(artwork, contentDescription = "Photo", modifier = Modifier.fillMaxSize())
             }
         } else {
-            Column(Modifier.fillMaxSize().background(bg).safeDrawingPadding()) {
-                if (!liveFullscreen) HarmonyHeader(tab, onNavigate = { navigateTab(it); searchOpen = false },
-                    onSearch = { searchOpen = !searchOpen }, onAdd = { navigateTab("Settings") })
+            Column(Modifier.fillMaxSize().background(if (phoneUi) phoneNavy else bg).safeDrawingPadding()) {
+                if (!liveFullscreen) {
+                    if (phoneUi) PhoneHeader(onSearch = { searchOpen = !searchOpen })
+                    else HarmonyHeader(tab, onNavigate = { navigateTab(it); searchOpen = false },
+                        onSearch = { searchOpen = !searchOpen }, onAdd = { navigateTab("Settings") })
+                }
                 if (searchOpen && !liveFullscreen) {
                     OutlinedTextField(searchText, { searchText = it },
                         placeholder = { Text("⌕ Search your PersonalMedia library") },
@@ -567,6 +576,8 @@ private fun PersonalMediaApp(chooseFiles: (String?, (List<Uri>) -> Unit) -> Unit
                             onPlay = playRemote, onTorrentPlay = playTorrent,
                             onDirectPlay = playDirect,
                             preferredQuality = playbackPreferences.preferredQuality,
+                            startOnDiscover = phoneUi,
+                            discoverSignal = discoverTapSignal,
                             onWatch = { meta, videoId ->
                                 stWatch.mark(meta, videoId); playingStremio = meta to videoId
                             })
@@ -662,7 +673,9 @@ private fun PersonalMediaApp(chooseFiles: (String?, (List<Uri>) -> Unit) -> Unit
                                 val (records, result) = local.undoRepair()
                                 localItems = records; folderNotice = result; message = result
                             })
-                        else -> HarmonyMediaScreen(tab, localItems,
+                        else -> if (phoneUi && tab == "Home") PhoneHomeScreen(localItems,
+                            onPlay = playLocal, onNavigate = { navigateTab(it); searchOpen = false })
+                        else HarmonyMediaScreen(tab, localItems,
                             onPlay = playLocal,
                             onFavourite = { item -> localItems = local.update(item.copy(favourite = !item.favourite)) },
                             onWatched = { item -> localItems = local.update(item.copy(watched = !item.watched)) },
@@ -684,6 +697,11 @@ private fun PersonalMediaApp(chooseFiles: (String?, (List<Uri>) -> Unit) -> Unit
                                 if (split.size == 2) libraryRoute = split[1]
                             })
                     }
+                }
+                if (phoneUi && !liveFullscreen) PhoneBottomNavigation(tab) {
+                    if (it == "Stremio") discoverTapSignal++
+                    navigateTab(it)
+                    searchOpen = false
                 }
             }
         }
@@ -734,7 +752,9 @@ private fun HarmonyHeader(tab: String, onNavigate: (String) -> Unit,
 
 @Composable
 private fun SettingsBlock(eyebrow: String, title: String, content: @Composable ColumnScope.() -> Unit) {
-    Column(Modifier.fillMaxWidth().background(panel, RoundedCornerShape(17.dp)).padding(22.dp),
+    val phoneUi = LocalConfiguration.current.smallestScreenWidthDp < 600
+    Column(Modifier.fillMaxWidth().background(if (phoneUi) phoneSurface else panel,
+        RoundedCornerShape(17.dp)).padding(if (phoneUi) 16.dp else 22.dp),
         verticalArrangement = Arrangement.spacedBy(13.dp)) {
         Text(eyebrow, color = Color(0xFFB4C5EC), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
         Text(title, style = MaterialTheme.typography.titleLarge,
@@ -745,9 +765,13 @@ private fun SettingsBlock(eyebrow: String, title: String, content: @Composable C
 
 @Composable
 private fun SettingsRow(label: String, result: String) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, color = muted, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-        Text(result, color = Color.White, style = MaterialTheme.typography.bodySmall)
+    val phoneUi = LocalConfiguration.current.smallestScreenWidthDp < 600
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text(label, color = muted, style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.weight(1f))
+        Text(result, color = Color.White, style = MaterialTheme.typography.bodySmall,
+            modifier = if (phoneUi) Modifier.weight(1f) else Modifier,
+            textAlign = TextAlign.End)
     }
 }
 
@@ -782,7 +806,11 @@ private fun SettingsScreen(count: Int, loggedIn: Boolean,
     var confirmRepair by remember { mutableStateOf(false) }
     var confirmMissing by remember { mutableStateOf(false) }
     var artworkLanguageDraft by remember { mutableStateOf(artworkPreferences.language) }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 26.dp),
+    val phoneUi = LocalConfiguration.current.smallestScreenWidthDp < 600
+    Column(Modifier.fillMaxSize().background(if (phoneUi) phoneNavy else bg)
+        .verticalScroll(rememberScrollState())
+        .padding(horizontal = if (phoneUi) 14.dp else 24.dp,
+            vertical = if (phoneUi) 17.dp else 26.dp),
         verticalArrangement = Arrangement.spacedBy(17.dp)) {
         PmEyebrow("PERSONALMEDIA")
         Text("Settings", style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Bold, color = Color.White)

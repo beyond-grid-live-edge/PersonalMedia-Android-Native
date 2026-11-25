@@ -1,6 +1,7 @@
 package com.personalmedia.android
 
 import android.app.Activity
+import android.content.res.Configuration
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -16,6 +17,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
@@ -70,6 +73,12 @@ fun StremioMpvPlayerScreen(
     afterStop: () -> Unit = {}
 ) {
     val context = LocalContext.current
+    val phoneUi = LocalConfiguration.current.smallestScreenWidthDp < 600
+    val phonePortrait = LocalConfiguration.current.let {
+        it.smallestScreenWidthDp < 600 && it.orientation == Configuration.ORIENTATION_PORTRAIT
+    }
+    var phoneFullscreen by remember { mutableStateOf(false) }
+    val phoneCompact = phonePortrait && !phoneFullscreen
     val activity = context as? Activity
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
@@ -136,15 +145,16 @@ fun StremioMpvPlayerScreen(
         currentOnProgress(lastKnownMs)
         onClose()
     }
-    BackHandler { close() }
-    LaunchedEffect(controlsVisible, started, error, audioMenuOpen, subtitleMenuOpen) {
-        if (controlsVisible && started && error.isEmpty() && !audioMenuOpen && !subtitleMenuOpen) {
+    BackHandler { if (phoneFullscreen) phoneFullscreen = false else close() }
+    LaunchedEffect(controlsVisible, started, error, audioMenuOpen, subtitleMenuOpen, phoneCompact) {
+        if (!phoneCompact && controlsVisible && started && error.isEmpty() &&
+            !audioMenuOpen && !subtitleMenuOpen) {
             delay(4500)
             controlsVisible = false
         }
     }
 
-    DisposableEffect(activity, preferences.keepScreenAwake, paused) {
+    DisposableEffect(activity, preferences.keepScreenAwake, paused, phoneCompact) {
         val window = activity?.window
         val originalUi = window?.decorView?.systemUiVisibility
         if (preferences.keepScreenAwake && !paused)
@@ -152,7 +162,7 @@ fun StremioMpvPlayerScreen(
         else window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         @Suppress("DEPRECATION")
         window?.let { w ->
-            w.decorView.systemUiVisibility = (originalUi ?: 0) or
+            if (!phoneCompact) w.decorView.systemUiVisibility = (originalUi ?: 0) or
                 View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
                 View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
         }
@@ -407,10 +417,15 @@ fun StremioMpvPlayerScreen(
     // Full-screen video surface. Unlike the old Column+weighted SurfaceView,
     // controls OVERLAY the video without shrinking it to a narrow strip.
     // Audio/CC tracks use pop-up menus, not always-visible rows.
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
+    BoxWithConstraints(Modifier.fillMaxSize().background(if (phoneCompact)
+            Brush.verticalGradient(listOf(Color(0xFF0F1E35), phoneNavy))
+        else Brush.verticalGradient(listOf(Color.Black, Color.Black)))) {
+        val phoneVideoHeight = maxWidth * 9f / 16f
         AndroidView(factory = { ctx ->
             SurfaceView(ctx).apply {
                 setOnClickListener {
+                    // A tap reveals/hides the controls. Playback changes ONLY
+                    // through the explicit Play/Pause button (not the video).
                     controlsVisible = !controlsVisible
                     if (!controlsVisible) { audioMenuOpen = false; subtitleMenuOpen = false }
                 }
@@ -420,7 +435,9 @@ fun StremioMpvPlayerScreen(
                     override fun surfaceDestroyed(holder: SurfaceHolder) { surface = null }
                 })
             }
-        }, modifier = Modifier.fillMaxSize())
+        }, modifier = if (phoneCompact) Modifier.align(Alignment.TopCenter).fillMaxWidth()
+            .padding(top = 56.dp).height(phoneVideoHeight)
+            else Modifier.fillMaxSize())
 
         if (controlsVisible || canRetry) {
             Row(Modifier.align(Alignment.TopCenter).fillMaxWidth()
@@ -496,9 +513,12 @@ fun StremioMpvPlayerScreen(
         }
 
         if (controlsVisible) {
-            Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
-                .background(Color(0xCB081423)).padding(horizontal = 10.dp, vertical = 4.dp),
-                verticalArrangement = Arrangement.spacedBy(0.dp)) {
+            Column(Modifier.then(if (phoneCompact) Modifier.align(Alignment.TopCenter)
+                    .padding(top = 56.dp + phoneVideoHeight + 8.dp)
+                else Modifier.align(Alignment.BottomCenter)).fillMaxWidth()
+                .background(if (phoneCompact) Color(0xFF11243E) else Color(0xCB081423))
+                .padding(horizontal = 10.dp, vertical = if (phoneCompact) 12.dp else 4.dp),
+                verticalArrangement = Arrangement.spacedBy(if (phoneCompact) 5.dp else 0.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(timeText(dragMs ?: positionMs), color = Color.White, fontSize = 11.sp)
@@ -512,9 +532,26 @@ fun StremioMpvPlayerScreen(
                         modifier = Modifier.weight(1f).height(30.dp))
                     Text(timeText(durationMs), color = Color.LightGray, fontSize = 11.sp)
                 }
+                if (phoneCompact) Row(Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceEvenly) {
+                    TextButton(onClick = {
+                        serial.execute { NativeBridge.mpvSeekStremio((positionMs - 10000).coerceAtLeast(0)) }
+                    }, enabled = started && seekable) { Text("↶ 10", color = Color.White, fontSize = 16.sp) }
+                    TextButton(onClick = {
+                        serial.execute { NativeBridge.mpvPauseStremio(!paused) }
+                        paused = !paused
+                    }, enabled = started) {
+                        Text(if (paused) "▶" else "Ⅱ", color = phoneBlue, fontSize = 28.sp)
+                    }
+                    TextButton(onClick = {
+                        serial.execute { NativeBridge.mpvSeekStremio((positionMs + 10000).coerceAtMost(durationMs)) }
+                    }, enabled = started && seekable) { Text("10 ↷", color = Color.White, fontSize = 16.sp) }
+                }
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (!phoneCompact) {
                     TextButton(onClick = {
                         serial.execute { NativeBridge.mpvPauseStremio(!paused) }
                         paused = !paused
@@ -525,6 +562,7 @@ fun StremioMpvPlayerScreen(
                     TextButton(onClick = {
                         serial.execute { NativeBridge.mpvSeekStremio((positionMs + 10000).coerceAtMost(durationMs)) }
                     }, enabled = started && seekable) { Text("+10s", fontSize = 12.sp) }
+                    }
                     Box {
                         TextButton(onClick = { audioMenuOpen = true; subtitleMenuOpen = false }) {
                             Text("Audio ▾", fontSize = 12.sp)
@@ -605,6 +643,10 @@ fun StremioMpvPlayerScreen(
                             }
                         }
                     }
+                    if (phonePortrait) TextButton(onClick = {
+                        phoneFullscreen = !phoneFullscreen
+                        controlsVisible = true
+                    }) { Text(if (phoneFullscreen) "Exit fullscreen" else "⛶ Fullscreen", fontSize = 12.sp) }
                     TextButton(onClick = ::close) { Text("Stop", fontSize = 12.sp) }
                 }
             }
