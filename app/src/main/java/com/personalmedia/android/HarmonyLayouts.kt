@@ -14,6 +14,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -336,6 +337,7 @@ internal fun HarmonyMediaScreen(tab: String, library: List<MediaEntry>, onPlay: 
     onFavourite: (MediaEntry) -> Unit, onWatched: (MediaEntry) -> Unit,
     onRemove: (MediaEntry) -> Unit, onImport: () -> Unit, onFolder: () -> Unit,
     requestedLibraryView: String = "", goTo: (String) -> Unit) {
+    val phoneUi = LocalConfiguration.current.smallestScreenWidthDp < 600
     var detail by remember(tab) { mutableStateOf<MediaEntry?>(null) }
     var series by remember(tab) { mutableStateOf<String?>(null) }
     var movieCollectionOpen by remember(tab) { mutableStateOf<String?>(null) }
@@ -374,6 +376,8 @@ internal fun HarmonyMediaScreen(tab: String, library: List<MediaEntry>, onPlay: 
     val activeMovieKeys = remember(shown) { LocalLibraryOrganizer.movieEditions(shown).map { it.key }.toSet() }
     val activeTvKeys = remember(shown) { LocalLibraryOrganizer.tvShows(shown).map { it.key }.toSet() }
     var visibleMovieCount by remember(tab, search, watch, order) { mutableIntStateOf(72) }
+    // Keep large music/photo libraries responsive on phones: reveal more only when requested.
+    var visiblePhoneCount by remember(tab, search, watch, order) { mutableIntStateOf(60) }
     BackHandler(enabled = detail != null || series != null || movieCollectionOpen != null || tvCollectionOpen != null) {
         when {
             detail != null -> detail = null
@@ -382,8 +386,10 @@ internal fun HarmonyMediaScreen(tab: String, library: List<MediaEntry>, onPlay: 
             tvCollectionOpen != null -> tvCollectionOpen = null
         }
     }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())
-        .padding(horizontal = if (tab == "Home") 16.dp else 28.dp).padding(bottom = 40.dp)) {
+    Column(Modifier.fillMaxSize().background(if (phoneUi) phoneNavy else pmBg)
+        .verticalScroll(rememberScrollState())
+        .padding(horizontal = if (phoneUi || tab == "Home") 16.dp else 28.dp)
+        .padding(bottom = 40.dp)) {
         if (movieCollectionOpen != null && detail == null) {
             val group = allMovieCollections.firstOrNull { it.key == movieCollectionOpen }
             TextButton(onClick = { movieCollectionOpen = null }) { Text("‹ Back to Movies") }
@@ -426,7 +432,8 @@ internal fun HarmonyMediaScreen(tab: String, library: List<MediaEntry>, onPlay: 
             val movieVersions = if (item.type == "movie") allMovies.firstOrNull {
                 it.key == LocalLibraryOrganizer.movieIdentity(item).first } else null
             TextButton(onClick = { detail = null }) { Text("‹  Back to $tab") }
-            Box(Modifier.fillMaxWidth().height(305.dp).clip(RoundedCornerShape(15.dp))
+            Box(Modifier.fillMaxWidth().height(if (phoneUi) 235.dp else 305.dp)
+                .clip(RoundedCornerShape(15.dp))
                 .background(tileGradient)) {
                 val image = if (item.type == "picture") item.uri else item.backdrop.ifBlank { item.art }
                 if (image.isNotEmpty()) AsyncImage(image, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
@@ -434,7 +441,9 @@ internal fun HarmonyMediaScreen(tab: String, library: List<MediaEntry>, onPlay: 
                 Column(Modifier.align(Alignment.BottomStart).padding(23.dp)) {
                     PmEyebrow("YOUR LIBRARY / ${item.type.uppercase()}")
                     Text(movieVersions?.let { it.title + if (it.year.isNotBlank()) " (${it.year})" else "" }
-                        ?: item.title, fontSize = 36.sp, lineHeight = 39.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        ?: item.title, fontSize = if (phoneUi) 26.sp else 36.sp,
+                        lineHeight = if (phoneUi) 29.sp else 39.sp,
+                        fontWeight = FontWeight.Bold, color = Color.White)
                     Text(item.folder.ifEmpty { "Local file" }, color = Color(0xFFB7D7FF), fontSize = 12.sp)
                 }
             }
@@ -511,8 +520,18 @@ internal fun HarmonyMediaScreen(tab: String, library: List<MediaEntry>, onPlay: 
             Spacer(Modifier.height(26.dp))
             PmEyebrow("YOUR LIBRARY")
             Spacer(Modifier.height(5.dp))
-            Text(tab, fontSize = 42.sp, lineHeight = 47.sp, fontWeight = FontWeight.Bold, color = Color.White)
-            Spacer(Modifier.height(30.dp))
+            Text(tab, fontSize = if (phoneUi) 29.sp else 42.sp,
+                lineHeight = if (phoneUi) 33.sp else 47.sp,
+                fontWeight = FontWeight.Bold, color = Color.White)
+            Spacer(Modifier.height(if (phoneUi) 16.dp else 30.dp))
+            if (phoneUi && tab == "Library") {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(listOf("Movies", "TV Shows", "Music", "Pictures", "Favourites", "Live TV")) { name ->
+                        PmPill(name, false) { goTo(name) }
+                    }
+                }
+                Spacer(Modifier.height(14.dp))
+            }
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(listOf("All")) { PmPill(it, genre == it) { genre = it } }
             }
@@ -557,17 +576,19 @@ internal fun HarmonyMediaScreen(tab: String, library: List<MediaEntry>, onPlay: 
                         fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(14.dp))
                     BoxWithConstraints(Modifier.fillMaxWidth()) {
-                        val columns = (maxWidth.value / 174f).toInt().coerceAtLeast(1)
+                        val columns = if (phoneUi) 2 else (maxWidth.value / 174f).toInt().coerceAtLeast(1)
                         Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
                             standalones.take(visibleMovieCount).chunked(columns).forEach { row ->
-                                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                     row.forEach { movie ->
                                         val best = movie.editions.firstOrNull { it.art.isNotBlank() } ?: movie.editions.first()
-                                        PmPosterTile(best.copy(title = movie.title +
-                                            if (movie.year.isNotBlank()) " (${movie.year})" else ""), false) {
-                                            detail = movie.editions.first()
-                                        }
+                                        val item = best.copy(title = movie.title +
+                                            if (movie.year.isNotBlank()) " (${movie.year})" else "")
+                                        if (phoneUi) Box(Modifier.weight(1f)) {
+                                            PhonePosterCard(item, Modifier.fillMaxWidth()) { detail = movie.editions.first() }
+                                        } else PmPosterTile(item, false) { detail = movie.editions.first() }
                                     }
+                                    if (phoneUi) repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
                                 }
                             }
                         }
@@ -599,24 +620,40 @@ internal fun HarmonyMediaScreen(tab: String, library: List<MediaEntry>, onPlay: 
                         fontWeight = FontWeight.Bold, color = Color.White)
                     Spacer(Modifier.height(15.dp))
                     BoxWithConstraints(Modifier.fillMaxWidth()) {
-                        val columns = (maxWidth.value / 194f).toInt().coerceAtLeast(1)
+                        val columns = if (phoneUi) 2 else (maxWidth.value / 194f).toInt().coerceAtLeast(1)
                         Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
                             shows.chunked(columns).forEach { row ->
-                                Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                     row.forEach { show ->
-                                        PmSeriesTile(show.title, show.episodes) { series = show.key }
+                                        if (phoneUi) Box(Modifier.weight(1f)) {
+                                            val art = show.episodes.first().copy(title = show.title, type = "tv")
+                                            PhonePosterCard(art, Modifier.fillMaxWidth()) { series = show.key }
+                                        } else PmSeriesTile(show.title, show.episodes) { series = show.key }
                                     }
+                                    if (phoneUi) repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
                                 }
                             }
                         }
                     }
                 } else BoxWithConstraints(Modifier.fillMaxWidth()) {
-                    val columns = (maxWidth.value / 174f).toInt().coerceAtLeast(1)
+                    val columns = if (phoneUi) 2 else (maxWidth.value / 174f).toInt().coerceAtLeast(1)
                     Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
-                        shown.chunked(columns).forEach { row ->
-                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                row.forEach { media -> PmPosterTile(media, media.type == "music") { detail = media } }
+                        shown.take(if (phoneUi) visiblePhoneCount else shown.size)
+                            .chunked(columns).forEach { row ->
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                row.forEach { media ->
+                                    if (phoneUi) Box(Modifier.weight(1f)) {
+                                        PhonePosterCard(media, Modifier.fillMaxWidth()) { detail = media }
+                                    } else PmPosterTile(media, media.type == "music") { detail = media }
+                                }
+                                if (phoneUi) repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
                             }
+                        }
+                    }
+                    if (phoneUi && shown.size > visiblePhoneCount) {
+                        Spacer(Modifier.height(18.dp))
+                        PmRoundButton("Show more · ${shown.size - visiblePhoneCount} remaining") {
+                            visiblePhoneCount += 60
                         }
                     }
                 }

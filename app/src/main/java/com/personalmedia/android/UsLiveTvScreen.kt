@@ -15,6 +15,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -34,6 +35,7 @@ private val usAccent = Color(0xFF78BAFF)
 @Composable
 internal fun UsLiveTvScreen(onFullscreenChanged: (Boolean) -> Unit = {}) {
     val context = LocalContext.current
+    val phoneUi = LocalConfiguration.current.smallestScreenWidthDp < 600
     val repo = remember { UsTvRepository(context.applicationContext) }
     val scope = rememberCoroutineScope()
     var channels by remember { mutableStateOf(repo.cached()) }
@@ -185,13 +187,25 @@ internal fun UsLiveTvScreen(onFullscreenChanged: (Boolean) -> Unit = {}) {
                     OutlinedTextField(search, { search = it },
                         label = { Text("Search US channels") }, singleLine = true,
                         modifier = Modifier.weight(1f))
+                    if (!phoneUi) {
+                        TextButton(onClick = { favouritesOnly = !favouritesOnly }) {
+                            Text(if (favouritesOnly) "★ Saved" else "☆ All")
+                        }
+                        TextButton(onClick = { refreshCatalog() }, enabled = !loadingCatalog) { Text("↻") }
+                        TextButton(onClick = {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(UsTvPolicy.COUNTRY_URL)))
+                        }) { Text("Site") }
+                    }
+                }
+                if (phoneUi) Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(onClick = { favouritesOnly = !favouritesOnly }) {
                         Text(if (favouritesOnly) "★ Saved" else "☆ All")
                     }
-                    TextButton(onClick = { refreshCatalog() }, enabled = !loadingCatalog) { Text("↻") }
+                    TextButton(onClick = { refreshCatalog() }, enabled = !loadingCatalog) { Text("↻ Refresh") }
                     TextButton(onClick = {
                         context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(UsTvPolicy.COUNTRY_URL)))
-                    }) { Text("Site") }
+                    }) { Text("Website") }
                 }
                 Text(message, color = usMuted, style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 5.dp))
