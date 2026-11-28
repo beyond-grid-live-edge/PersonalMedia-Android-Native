@@ -4,7 +4,7 @@
 
 **PersonalMedia for Android** is an independent native Android port of the PersonalMedia HarmonyOS application. It combines a local media library, Stremio, UK Freeview, US Internet TV and persistent media downloads.
 
-**Current source:** STR-7D (November 2026). Native Kotlin/Jetpack Compose + Media3, with JNI/C++ for the August tuner, native MPV and hash-verified libtorrent streams. **Development source, not a published APK release.**
+**Current source:** M05e (28 November 2026), version `200012` / `20.0.12-android-play-m05e`. Native Kotlin/Jetpack Compose + Media3, with JNI/C++ for the August tuner, native MPV and hash-verified libtorrent streams. **The source repository is not itself a signed APK download.** See the [independent APK build and GitHub Release guide](docs/INDEPENDENT_ANDROID_RELEASE.md) for an installable release workflow.
 
 ## Features
 
@@ -20,19 +20,19 @@
 
 ### Verification
 
-User-reported **Honor 90** testing has confirmed real libtorrent video **and audio**, seeking, torrent cancel/source switching, a completed Backrooms torrent download and US channel playback in Media3. Later STR-7 features (especially backup/restore and per-title track memory) still require targeted on-device validation. Code presence alone is not a release guarantee.
+User-reported **Honor 90** testing has confirmed real libtorrent video **and audio**, seeking, source switching, rapid Stremio playback startup (including *NCIS* and *The Hunger Games*), local media playback, subtitles, fullscreen, August T405 Live TV and backup/restore. Automatic decoding and visible torrent startup status are included in M05e. Code presence and a successful build are not universal device compatibility guarantees.
 
 ## Recommended devices
 
-**Android tablet or other large-screen Android device recommended**, ideally used in landscape orientation. PersonalMedia is a **tablet-first media centre**, like the original HarmonyOS edition: the Sky-style Freeview guide, local library shelves, Stremio catalog and multi-panel playback controls are designed to benefit from a larger display.
+**ARM64 Android phone or tablet supported** (Android API 26+). PersonalMedia now includes phone-optimised navigation and player controls as well as the original larger-screen layouts. Landscape mode remains useful for video and the Freeview guide.
 
-**Phones are not the primary layout target.** Core streaming and download features have been tested on an Honor 90, but smaller portrait screens may feel cramped and have not received the same interface optimisation as tablets. This is a recommendation, **not** a claim that phones cannot run the app.
+The Honor 90 is the principal tested phone. Other models, video codecs, and accessories need independent testing; avoid promising universal support.
 
 ## Build
 
 This repository contains the **full first-party source**, but **not** native MPV libraries, ABI-specific libtorrent/Boost/OpenSSL static archives, device-specific signing credentials or your app data. A fresh clone needs setup before compiling the torrent-enabled APK.
 
-**[Fresh clone & build instructions](docs/BUILDING.md)** · **[Architecture](docs/ARCHITECTURE.md)** · **[Milestone history](docs/history/README.md)**
+**[Fresh clone & build instructions](docs/BUILDING.md)** · **[Signed independent APK / GitHub Releases](docs/INDEPENDENT_ANDROID_RELEASE.md)** · **[Architecture](docs/ARCHITECTURE.md)** · **[Milestone history](docs/history/README.md)**
 
 For the existing Windows ARM64 project with cloud dependencies already imported:
 
@@ -41,7 +41,7 @@ cd "C:\Users\WindowsVM\Downloads\PersonalMedia"
 .\tools\STR5C-Build-With-Cloud-Libraries.ps1 -Arm64Only
 ~~~
 
-Successful output: `app/build/outputs/apk/debug/app-debug.apk`. **Do not install a stale APK after a build error.** Keep the original package signing identity and install **over** the existing app; uninstalling may erase saved channels, library, queue and account data.
+Successful debug output: `app/build/outputs/apk/debug/app-debug.apk`. For an independently installable **signed release APK**, follow the [M05e independent release guide](docs/INDEPENDENT_ANDROID_RELEASE.md). **Do not install a stale APK after a build error.** Check the signing certificate before attempting an in-place upgrade; Google Play may use a different certificate. Uninstalling may erase saved channels, library, queue and account data.
 
 ## Repository layout
 

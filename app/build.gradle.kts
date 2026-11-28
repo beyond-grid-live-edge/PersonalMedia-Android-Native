@@ -8,16 +8,19 @@ plugins {
 val pmNativeTorrent = providers.gradleProperty("pmTorrent")
     .map { it.equals("true", ignoreCase = true) }.getOrElse(false)
 val pmTorrentAbis = providers.gradleProperty("pmTorrentAbis").orNull
+// M05b: pass the native dependency directory as a CMake argument. Gradle's
+// already-running daemon may not forward newly set PowerShell environment vars.
+val pmTorrentDepsRoot = providers.gradleProperty("pmTorrentDepsRoot").orNull
 
 android {
     namespace = "com.personalmedia.android"
-    compileSdk = 35
+    compileSdk = 36
     defaultConfig {
         applicationId = "com.personalmedia.android"
         minSdk = 26
-        targetSdk = 35
-        versionCode = 200009
-        versionName = "20.0.9-android-pmt"
+        targetSdk = 36
+        versionCode = 200012
+        versionName = "20.0.12-android-play-m05e"
         ndk {
             abiFilters += if (pmNativeTorrent && pmTorrentAbis == "arm64-v8a")
                 listOf("arm64-v8a")
@@ -28,6 +31,9 @@ android {
                 cppFlags += "-std=c++17"
                 arguments += listOf("-DANDROID_STL=c++_static",
                     "-DPM_REQUIRE_LIBTORRENT=${if (pmNativeTorrent) "ON" else "OFF"}")
+                if (pmNativeTorrent && !pmTorrentDepsRoot.isNullOrBlank()) {
+                    arguments += "-DPM_TORRENT_DEPS_ROOT=${pmTorrentDepsRoot.replace('\\', '/')}"
+                }
             }
         }
     }
@@ -39,6 +45,8 @@ android {
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
     externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "3.22.1" } }
+    // Preserve the proven extracted-native-libraries runtime on tested phones.
+    // All ELF LOAD segments must still be 16 KB compatible for Play distribution.
     packaging { jniLibs { useLegacyPackaging = true } }
 }
 

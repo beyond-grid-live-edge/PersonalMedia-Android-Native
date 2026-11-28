@@ -9,7 +9,7 @@ internal object StremioMpvState {
         phase == "failed" -> when (code) {
             -13 -> "The selected direct stream failed to open in MPV. Checking the provider response and available playback alternatives."
             -14 -> "MPV could not initialise the audio output."
-            -15 -> "MPV could not initialise the video output. Try software video decoding."
+            -15 -> "MPV could not initialise video output. The app will try a compatible decoder automatically."
             -16 -> "This source contained no playable audio or video."
             -17 -> "MPV could not recognise the stream's media format."
             -18 -> "This media format is not supported by the installed MPV build."
@@ -23,7 +23,7 @@ internal object StremioMpvState {
         phase == "ready" && elapsedMs >= 12000L && videoTracks == 0 ->
             "Stream loaded without a video track. It may be audio-only or unsupported."
         phase == "ready" && elapsedMs >= 12000L && videoTracks > 0 && videoWidth <= 0 ->
-            "Video track detected, but no decoded frame yet. Try software video decoding."
+            "Video track detected, but no decoded frame yet. The app checks decoder compatibility automatically."
         else -> ""
     }
 }

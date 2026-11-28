@@ -15,19 +15,32 @@ add_library(personalmedia SHARED
     portable/matroska_cues.cpp
     portable/matroska_mp4.cpp)
 target_include_directories(personalmedia PRIVATE portable)
+if(ANDROID)
+    # NDK r27 and older need explicit 16 KB LOAD/RELRO page alignment.
+    # Required for Google Play's 16 KB memory-page devices; this does not
+    # repair separately staged third-party .so files such as libmpv.so.
+    target_link_options(personalmedia PRIVATE
+        "-Wl,-z,max-page-size=16384"
+        "-Wl,-z,common-page-size=16384")
+endif()
 find_library(log-lib log)
 target_link_libraries(personalmedia PRIVATE ${log-lib})
 # STR-5B: explicit, ABI-matched Android libtorrent dependency integration.
 # Plain :app:assembleDebug remains a safe baseline and never claims P2P support.
 # To build real P2P: -PpmTorrent=true and supply PM_TORRENT_DEPS_ROOT
-# pointing at a vcpkg `installed` folder containing the custom pm-* triplets.
+# as an explicit CMake definition (preferred) or a process environment
+# variable (legacy), pointing at the installed folder of pm-* triplets.
 option(PM_REQUIRE_LIBTORRENT "Require a real libtorrent for this build" OFF)
 if(PM_REQUIRE_LIBTORRENT)
     if(NOT ANDROID)
         message(FATAL_ERROR "STR-5B torrent link mode requires the Android NDK")
     endif()
-    if(NOT DEFINED ENV{PM_TORRENT_DEPS_ROOT} OR "$ENV{PM_TORRENT_DEPS_ROOT}" STREQUAL "")
-        message(FATAL_ERROR "STR-5B: PM_TORRENT_DEPS_ROOT not set. Run tools/STR5B-Build-Libtorrent.ps1")
+    if(DEFINED PM_TORRENT_DEPS_ROOT AND NOT "${PM_TORRENT_DEPS_ROOT}" STREQUAL "")
+        set(_pm_requested_deps_root "${PM_TORRENT_DEPS_ROOT}")
+    elseif(DEFINED ENV{PM_TORRENT_DEPS_ROOT} AND NOT "$ENV{PM_TORRENT_DEPS_ROOT}" STREQUAL "")
+        set(_pm_requested_deps_root "$ENV{PM_TORRENT_DEPS_ROOT}")
+    else()
+        message(FATAL_ERROR "STR-5B: PM_TORRENT_DEPS_ROOT missing. Pass -PpmTorrentDepsRoot=<installed directory> to Gradle or set PM_TORRENT_DEPS_ROOT.")
     endif()
 
     # Gradle/NDK generates one CMake build per Android ABI.
@@ -43,7 +56,7 @@ if(PM_REQUIRE_LIBTORRENT)
         message(FATAL_ERROR "STR-5B: unsupported Android ABI '${ANDROID_ABI}'")
     endif()
 
-    file(TO_CMAKE_PATH "$ENV{PM_TORRENT_DEPS_ROOT}" _pm_deps_root)
+    file(TO_CMAKE_PATH "${_pm_requested_deps_root}" _pm_deps_root)
     set(_pm_prefix "${_pm_deps_root}/${_pm_triplet}")
     if(NOT EXISTS "${_pm_prefix}/include/libtorrent/session.hpp")
         message(FATAL_ERROR "STR-5B: real Android ${ANDROID_ABI} libtorrent not installed at ${_pm_prefix}; do not generate a disabled APK")
