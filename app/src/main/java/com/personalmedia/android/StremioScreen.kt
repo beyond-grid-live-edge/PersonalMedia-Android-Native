@@ -301,6 +301,8 @@ fun StremioScreen(client: StremioClient, revision: Int, onRevision: () -> Unit,
     var activeAction by remember { mutableStateOf("Play") }
     var torrentStage by remember { mutableStateOf("") }
     var torrentStats by remember { mutableStateOf("") }
+    var torrentStartedAtMs by remember { mutableLongStateOf(0L) }
+    var torrentElapsedMs by remember { mutableLongStateOf(0L) }
     var downloadProgress by remember { mutableStateOf("") }
     val p2pPrefs = remember(appContext) {
         appContext.getSharedPreferences("personalmedia_p2p_consent", android.content.Context.MODE_PRIVATE)
@@ -399,19 +401,18 @@ fun StremioScreen(client: StremioClient, revision: Int, onRevision: () -> Unit,
     // appear in UI messages. No stats polling after Cancel is pressed.
     LaunchedEffect(sourceBusy, activeSource?.hash) {
         while (sourceBusy && activeSource?.kind == "Torrent") {
+            torrentElapsedMs = (android.os.SystemClock.elapsedRealtime() - torrentStartedAtMs)
+                .coerceAtLeast(0L)
             val row = withContext(Dispatchers.IO) {
                 runCatching { JSONObject(NativeBridge.torrentStatus()) }.getOrNull()
             }
             if (row != null && row.optBoolean("active")) {
-                val peers = row.optInt("peers", 0)
-                val speedKiB = row.optLong("downloadBps", 0L).coerceAtLeast(0L) / 1024
-                val verifiedKiB = row.optLong("verifiedAhead", 0L).coerceAtLeast(0L) / 1024
-                val metadata = row.optBoolean("metadata", false)
-                val replies = row.optInt("trackerReplies", 0)
-                val dhtNodes = row.optInt("dhtNodes", 0)
-                torrentStats = (if (metadata) "Metadata received" else "Acquiring metadata") +
-                    " · Peers $peers · DHT $dhtNodes · Tracker replies $replies · " +
-                    "${speedKiB} KiB/s · ${verifiedKiB} KiB verified ahead"
+                // M05d deliberately hides the libtorrent status snapshot that
+                // caused the native crash. Its peer/rate counters are unknown,
+                // not zero: only show fields the safe status API can measure.
+                torrentStats = StremioStartupPolicy.torrentProgress(
+                    row.optBoolean("metadata", false), row.optLong("verifiedAhead", 0L),
+                    row.optInt("trackerReplies", 0), row.optInt("dhtNodes", 0))
             }
             delay(1250)
         }
@@ -594,7 +595,9 @@ fun StremioScreen(client: StremioClient, revision: Int, onRevision: () -> Unit,
         activeSource = source
         activeAction = if (saveTo == null) "Play" else "Download"
         sourceBusy = true
-        torrentStage = if (saveTo == null) "Starting native libtorrent and looking for peers…"
+        torrentStartedAtMs = android.os.SystemClock.elapsedRealtime()
+        torrentElapsedMs = 0L
+        torrentStage = if (saveTo == null) "Connecting to peers…"
             else if (source.kind == "Torrent") "Preparing verified pieces for export…"
             else "Downloading direct media to your chosen document…"
         torrentStats = ""
@@ -620,7 +623,7 @@ fun StremioScreen(client: StremioClient, revision: Int, onRevision: () -> Unit,
                         if (result.contains("cancelled", true)) "Torrent preparation cancelled" else
                             "Native torrent session could not start. Verify cache permissions and your torrent-enabled APK."
                     }
-                    torrentStage = "Torrent started. Searching for peers and authenticating metadata…"
+                    torrentStage = "Connecting to peers and retrieving authenticated metadata…"
                     // -1 is a common Stremio fileIdx. JNI resolves it from verified metadata.
                     var mediaUrl = ""
                     for (attempt in 1..120) {
@@ -630,8 +633,8 @@ fun StremioScreen(client: StremioClient, revision: Int, onRevision: () -> Unit,
                         }
                         if (mediaUrl.isNotEmpty()) break
                         if (attempt % 10 == 0) torrentStage =
-                            "Waiting for authenticated torrent metadata (${attempt}s). " +
-                                "If peers remain at 0, choose a better-seeded source."
+                            "Still preparing torrent (${attempt}s). " +
+                                "If this continues, try a better-seeded source."
                     }
                     check(mediaUrl.isNotBlank()) {
                         "No authenticated metadata or playable video after two minutes. " +
@@ -654,7 +657,7 @@ fun StremioScreen(client: StremioClient, revision: Int, onRevision: () -> Unit,
                         }
                         torrentNotice("Verified download complete. Saved to the chosen document location.")
                     } else {
-                        torrentStage = "Torrent endpoint ready. Opening native MPV…"
+                        torrentStage = "Preparing verified video for native MPV…"
                         onWatch(selected, selectedId)
                         onTorrentPlay(mediaUrl, source.subtitles, selected, selectedId)
                         handedOff = true
@@ -1064,6 +1067,9 @@ fun StremioScreen(client: StremioClient, revision: Int, onRevision: () -> Unit,
                                                     color = stBlue, strokeWidth = 2.dp)
                                                 Text("${activeAction} in progress", color = stMuted, fontSize = 11.sp)
                                             }
+                                            if (source.kind == "Torrent")
+                                                Text("Preparing for ${StremioStartupPolicy.elapsedLabel(torrentElapsedMs)}",
+                                                    color = stMuted, fontSize = 11.sp)
                                             if (torrentStats.isNotBlank())
                                                 Text(torrentStats, color = stMuted, fontSize = 11.sp)
                                             StAction("Cancel ${activeAction.lowercase()}") {

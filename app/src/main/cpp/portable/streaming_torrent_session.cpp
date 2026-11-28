@@ -439,11 +439,18 @@ StreamingInfo CurrentStreamingInfo() {
   out.lastError=e->lastError;
 #ifdef PM_WITH_LIBTORRENT
   try {
-    const auto status=e->torrent.status();
-    out.peers=status.num_peers;out.seeds=status.num_seeds;
-    out.downBytesPerSecond=uint64_t(std::max(0,status.download_rate));
-    if(e->fileSize>0 && e->torrent.torrent_file()) {
-      const uint64_t step=uint64_t(e->torrent.torrent_file()->piece_length());
+    // M05d: the Play ARM64 build aborts with a stack-canary failure when
+    // torrent_handle::status() returns its large torrent_status value here.
+    // The 2026-11-25 and 2026-11-28 tombstones both point to this function,
+    // from JNI torrentStatus() and torrentRangeUrl(). This is consistent with
+    // a prebuilt libtorrent/client ABI or compile-configuration mismatch.
+    // Until the dependency is rebuilt and verified with matching ABI flags,
+    // do not request that by-value snapshot. Real authenticated metadata,
+    // piece verification, and range serving continue to work independently.
+    // Peer/seeder/rate counters intentionally remain unknown (zero) for M05d.
+    const auto info=e->torrent.torrent_file();
+    if(e->fileSize>0 && info && info->piece_length()>0 && e->playhead<e->fileSize) {
+      const uint64_t step=uint64_t(info->piece_length());
       uint64_t pos=e->playhead;
       while(pos<e->fileSize && pos-e->playhead<128*1024*1024 &&
             e->torrent.have_piece(lt::piece_index_t(int((e->fileOffset+pos)/step)))) {

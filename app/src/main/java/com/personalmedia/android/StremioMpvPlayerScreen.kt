@@ -96,7 +96,11 @@ fun StremioMpvPlayerScreen(
     var mediaBuffering by remember { mutableStateOf(false) }
     var elapsedMs by remember { mutableLongStateOf(0) }
     var startedAt by remember { mutableLongStateOf(0) }
-    var softwareDecoder by remember { mutableStateOf(false) }
+    var noFrameSinceMs by remember { mutableLongStateOf(0L) }
+    var noFrameElapsedMs by remember { mutableLongStateOf(0L) }
+    // Start each source with MPV's safe automatic hardware selection. If native
+    // video output genuinely fails, switch once to software without user input.
+    var softwareDecoder by remember(uri) { mutableStateOf(false) }
     var compatibilityAgent by remember { mutableStateOf(false) }
     var sourceDiagnosis by remember { mutableStateOf("") }
     var sourceChecking by remember { mutableStateOf(false) }
@@ -205,6 +209,7 @@ fun StremioMpvPlayerScreen(
         sourceDiagnosis = ""; sourceChecking = false
         mediaPhase = "loading"; mediaFailureCode = 0; mediaVideoTracks = 0
         mediaWidth = 0; mediaBuffering = false; elapsedMs = 0
+        noFrameSinceMs = 0L; noFrameElapsedMs = 0L
         startedAt = android.os.SystemClock.elapsedRealtime()
         serial.execute {
             NativeBridge.mpvStopStremio()
@@ -265,7 +270,7 @@ fun StremioMpvPlayerScreen(
             if (!status.optBoolean("active")) {
                 mediaPhase = "failed"
                 mediaFailureCode = -15
-                error = "The native video surface stopped. Try Retry or software decoding."
+                error = "The native video surface stopped. Trying a compatible decoder…"
                 continue
             }
             mediaPhase = status.optString("phase", "loading")
@@ -281,11 +286,34 @@ fun StremioMpvPlayerScreen(
             }
             durationMs = status.optLong("durationMs", 0).coerceAtLeast(0)
             paused = status.optBoolean("paused")
+            // Count an unbuffered *ready* video with no frame continuously.
+            // Time spent finding peers or retrieving pieces does not count.
+            if (mediaPhase == "ready" && mediaVideoTracks > 0 && mediaWidth <= 0 &&
+                !mediaBuffering && !paused) {
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (noFrameSinceMs == 0L) noFrameSinceMs = now
+                noFrameElapsedMs = (now - noFrameSinceMs).coerceAtLeast(0L)
+            } else {
+                noFrameSinceMs = 0L
+                noFrameElapsedMs = 0L
+            }
             seekable = status.optBoolean("seekable")
             audioTracks = parseTracks(status.optJSONArray("audio"))
             subtitleTracks = parseTracks(status.optJSONArray("subtitles"))
             selectedAudio = status.optString("aid", "auto")
             selectedSubtitle = status.optString("sid", "auto")
+        }
+    }
+
+    // The software flag changes the MPV start key so the serialized player
+    // worker safely restarts. Slow torrent pieces and buffering are not codec errors.
+    LaunchedEffect(started, surface, softwareDecoder, paused, mediaPhase, mediaFailureCode,
+        noFrameElapsedMs, mediaBuffering, mediaVideoTracks, mediaWidth) {
+        if (StremioStartupPolicy.needsSoftwareRetry(started, surface?.isValid == true,
+                softwareDecoder, paused, mediaPhase, mediaFailureCode, noFrameElapsedMs,
+                mediaBuffering, mediaVideoTracks, mediaWidth)) {
+            error = ""
+            softwareDecoder = true
         }
     }
 
@@ -411,9 +439,15 @@ fun StremioMpvPlayerScreen(
         "MPV could not open the stream through Android HTTPS either. Try another source or inspect the bridge error."
         else StremioMpvState.notice(mediaPhase, mediaFailureCode,
             elapsedMs, mediaVideoTracks, mediaWidth, mediaBuffering)
+    // Verified-piece reads can legitimately wait up to 45 seconds. Keep the
+    // progress overlay visible rather than declaring a torrent stalled at 15s.
+    val stallThresholdMs = if (torrentPlayback) 60_000L else 30_000L
     val canRetry = error.isNotBlank() || mediaPhase in listOf("failed", "ended") ||
-        (started && elapsedMs >= 15000 && (mediaPhase == "loading" ||
-            (mediaPhase == "ready" && (mediaWidth <= 0 || positionMs <= 0))))
+        (started && elapsedMs >= stallThresholdMs && (mediaPhase == "loading" ||
+            (mediaPhase == "ready" && mediaWidth <= 0 && !mediaBuffering)))
+    val startupMessage = StremioStartupPolicy.playerMessage(mediaPhase,
+        mediaBuffering, torrentPlayback, mediaVideoTracks, mediaWidth, paused,
+        softwareDecoder, elapsedMs)
     // Full-screen video surface. Unlike the old Column+weighted SurfaceView,
     // controls OVERLAY the video without shrinking it to a narrow strip.
     // Audio/CC tracks use pop-up menus, not always-visible rows.
@@ -438,6 +472,27 @@ fun StremioMpvPlayerScreen(
         }, modifier = if (phoneCompact) Modifier.align(Alignment.TopCenter).fillMaxWidth()
             .padding(top = 56.dp).height(phoneVideoHeight)
             else Modifier.fillMaxSize())
+
+        // The message is transient. Compact phones keep it inside the video
+        // rectangle rather than forcing users to scroll to see playback status.
+        if (error.isEmpty() && !canRetry && surface?.isValid == true && startupMessage != null) {
+            Box(modifier = if (phoneCompact) Modifier.align(Alignment.TopCenter)
+                    .fillMaxWidth().padding(top = 56.dp).height(phoneVideoHeight)
+                else Modifier.align(Alignment.Center),
+                contentAlignment = Alignment.Center) {
+                Column(Modifier.background(Color(0xD2091425),
+                        androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp,
+                        color = Color(0xFF6AB5FF))
+                    Text(startupMessage, color = Color.White, fontSize = 13.sp)
+                    Text("Waiting ${StremioStartupPolicy.elapsedLabel(elapsedMs)}",
+                        color = Color(0xFFA9BFDA), fontSize = 11.sp)
+                }
+            }
+        }
 
         if (controlsVisible || canRetry) {
             Row(Modifier.align(Alignment.TopCenter).fillMaxWidth()
@@ -464,12 +519,6 @@ fun StremioMpvPlayerScreen(
                 else if (playbackNotice.isNotBlank()) Text(playbackNotice, color = Color(0xFFFFD18D), fontSize = 12.sp)
                 if (sourceChecking) Text("Checking provider response…", color = Color.LightGray, fontSize = 11.sp)
                 if (sourceDiagnosis.isNotBlank()) Text(sourceDiagnosis, color = Color(0xFF9DC8FF), fontSize = 11.sp)
-                if (started && !softwareDecoder && elapsedMs >= 12000 &&
-                    mediaPhase != "failed" && (mediaWidth <= 0 || positionMs <= 0)) {
-                    TextButton(onClick = { softwareDecoder = true }) {
-                        Text("Try software video decoding", fontSize = 12.sp)
-                    }
-                }
                 if (mediaPhase == "failed" && mediaFailureCode == -13 && !useVerifiedRedirect &&
                     !hasProviderAgent && !compatibilityAgent && uri.startsWith("https://", true)) {
                     TextButton(onClick = { compatibilityAgent = true; generation++ }) {
